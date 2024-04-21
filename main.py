@@ -59,7 +59,7 @@ def generate_text(seed_text, next_words, model, max_sequence_len):
 
 
 
-NeMain.run()
+createAndRunRNN_Model.run()
 
 
 
