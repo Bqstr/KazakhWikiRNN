@@ -1,8 +1,10 @@
 import numpy as np
 import pandas as pd
 
+
 class DataReader:
     def __init__(self, path, seq_length):
+        #readl all data form csv
         self.fp = pd.read_csv(path, header=None)
         # Combine all rows into a single string
         self.data = ''.join(self.fp[0].astype(str).values)
@@ -32,27 +34,22 @@ class DataReader:
     def just_started(self):
         return self.pointer == 0
 
-    def close(self):
-        pass  # No need to close anything when using pandas
-
 
 
 class RNN:
     def __init__(self, hidden_size, vocab_size, seq_length, learning_rate):
-        # hyper parameters
         self.hidden_size = hidden_size
         self.vocab_size = vocab_size
         self.seq_length = seq_length
         self.learning_rate = learning_rate
-        # model parameters
-        self.U = np.random.uniform(-np.sqrt(1. / vocab_size), np.sqrt(1. / vocab_size), (hidden_size, vocab_size))
-        self.V = np.random.uniform(-np.sqrt(1. / hidden_size), np.sqrt(1. / hidden_size), (vocab_size, hidden_size))
-        self.W = np.random.uniform(-np.sqrt(1. / hidden_size), np.sqrt(1. / hidden_size), (hidden_size, hidden_size))
-        self.b = np.zeros((hidden_size, 1))  # bias for hidden layer
-        self.c = np.zeros((vocab_size, 1))  # bias for output
+        #Weight ,bias
+        self.U = np.random.randn(hidden_size, vocab_size) * 0.01
+        self.V = np.random.randn(vocab_size, hidden_size) * 0.01
+        self.W = np.random.randn(hidden_size, hidden_size) * 0.01
+        self.b = np.zeros((hidden_size, 1))
+        self.c = np.zeros((vocab_size, 1))
 
         # memory vars for adagrad,
-        # ignore if you implement another approach
         self.mU = np.zeros_like(self.U)
         self.mW = np.zeros_like(self.W)
         self.mV = np.zeros_like(self.V)
@@ -68,56 +65,42 @@ class RNN:
         hs[-1] = np.copy(hprev)
         for t in range(len(inputs)):
             xs[t] = np.zeros((self.vocab_size, 1))
-            xs[t][inputs[t]] = 1  # one hot encoding , 1-of-k
-            hs[t] = np.tanh(np.dot(self.U, xs[t]) + np.dot(self.W, hs[t - 1]) + self.b)  # hidden state
-            os[t] = np.dot(self.V, hs[t]) + self.c  # unnormalized log probs for next char
-            ycap[t] = self.softmax(os[t])  # probs for next char
+            xs[t][inputs[t]] = 1
+            hs[t] = np.tanh(np.dot(self.U, xs[t]) + np.dot(self.W, hs[t - 1]) + self.b)
+            os[t] = np.dot(self.V, hs[t]) + self.c
+            ycap[t] = self.softmax(os[t])
         return xs, hs, ycap
 
     def backward(self, xs, hs, ps, targets):
-        # backward pass: compute gradients going backwards
         dU, dW, dV = np.zeros_like(self.U), np.zeros_like(self.W), np.zeros_like(self.V)
         db, dc = np.zeros_like(self.b), np.zeros_like(self.c)
         dhnext = np.zeros_like(hs[0])
         for t in reversed(range(self.seq_length)):
             dy = np.copy(ps[t])
-            # through softmax
-            dy[targets[t]] -= 1  # backprop into y
-            # calculate dV, dc
+            dy[targets[t]] -= 1
             dV += np.dot(dy, hs[t].T)
             dc += dy
-            # dh includes gradient from two sides, next cell and current output
-            dh = np.dot(self.V.T, dy) + dhnext  # backprop into h
-            # backprop through tanh non-linearity
-            dhrec = (1 - hs[t] * hs[t]) * dh  # dhrec is the term used in many equations
+            dh = np.dot(self.V.T, dy) + dhnext
+            dhrec = (1 - hs[t] * hs[t]) * dh
             db += dhrec
-            # calculate dU and dW
             dU += np.dot(dhrec, xs[t].T)
             dW += np.dot(dhrec, hs[t - 1].T)
-            # pass the gradient from next cell to the next iteration.
             dhnext = np.dot(self.W.T, dhrec)
-        # clip to mitigate exploding gradients
         for dparam in [dU, dW, dV, db, dc]:
-            np.clip(dparam, -5, 5, out=dparam)
+            np.clip(dparam, -1, 1, out=dparam)
         return dU, dW, dV, db, dc
 
     def loss(self, ps, targets):
-        # calculate cross-entropy loss
-        return np.mean(np.square(ps - targets))
-
+        return sum(-np.log(ps[t][targets[t], 0]) for t in range(self.seq_length))
+#update model using Adagrad optimization algorithm.
     def update_model(self, dU, dW, dV, db, dc):
-        # parameter update with adagrad
         for param, dparam, mem in zip([self.U, self.W, self.V, self.b, self.c],
                                       [dU, dW, dV, db, dc],
                                       [self.mU, self.mW, self.mV, self.mb, self.mc]):
             mem += dparam * dparam
-            param += -self.learning_rate * dparam / np.sqrt(mem + 1e-8)  # adagrad update
+            param += -self.learning_rate * dparam / np.sqrt(mem + 1e-8)
 
     def sample(self, h, seed_ix, n):
-        """
-        sample a sequence of integers from the model
-        h is memory state, seed_ix is seed letter from the first time step
-        """
         x = np.zeros((self.vocab_size, 1))
         x[seed_ix] = 1
         ixes = []
@@ -131,11 +114,13 @@ class RNN:
             ixes.append(ix)
         return ixes
 
+ #   Generates a sequence of characters from the model.
     def train(self, data_reader):
         iter_num = 0
-        threshold = 0.01
+        threshold = 0.1
         smooth_loss = -np.log(1.0 / data_reader.vocab_size) * self.seq_length
-        while (smooth_loss > threshold):
+        while smooth_loss > threshold:
+
             if data_reader.just_started():
                 hprev = np.zeros((self.hidden_size, 1))
             inputs, targets = data_reader.next_batch()
@@ -143,48 +128,26 @@ class RNN:
             dU, dW, dV, db, dc = self.backward(xs, hs, ps, targets)
             loss = self.loss(ps, targets)
             self.update_model(dU, dW, dV, db, dc)
-            smooth_loss = smooth_loss * 0.999 + loss * 0.001
+            smooth_loss = smooth_loss * 0.99 + loss * 0.01
             hprev = hs[self.seq_length - 1]
-            if not iter_num % 500:
-                sample_ix = self.sample(hprev, inputs[0], 100)
+            if iter_num % 500 == 0:
+
+                sample_ix = self.sample(hprev, inputs[0], 200)
                 print(''.join(data_reader.ix_to_char[ix] for ix in sample_ix))
                 print("\n\niter :%d, loss:%f" % (iter_num, smooth_loss))
+                print(smooth_loss)
+                print(threshold)
             iter_num += 1
-
-    def predict(self, data_reader, start, n):
-
-        # initialize input vector
-        x = np.zeros((self.vocab_size, 1))
-        chars = [ch for ch in start]
-        ixes = []
-        for i in range(len(chars)):
-            ix = data_reader.char_to_ix[chars[i]]
-            x[ix] = 1
-            ixes.append(ix)
-
-        h = np.zeros((self.hidden_size, 1))
-        # predict next n chars
-        for t in range(n):
-            h = np.tanh(np.dot(self.U, x) + np.dot(self.W, h) + self.b)
-            y = np.dot(self.V, h) + self.c
-            p = np.exp(y) / np.sum(np.exp(y))
-            ix = np.random.choice(range(self.vocab_size), p=p.ravel())
-            x = np.zeros((self.vocab_size, 1))
-            x[ix] = 1
-            ixes.append(ix)
-        txt = ''.join(data_reader.ix_to_char[i] for i in ixes)
-        return txt
 
 
 def run():
-    seq_length = 100
-    # Read text from the "input.txt" file
+    seq_length = 10
     data_reader = DataReader("myDataset.csv", seq_length)
-
     rnn = RNN(hidden_size=100, vocab_size=data_reader.vocab_size, seq_length=seq_length, learning_rate=0.1)
-    print("what")
     rnn.train(data_reader)
-    print(rnn.predict('get', 10))
+    print(rnn.predict(data_reader, 'get', 10))
+
 
 if __name__ == "__main__":
     run()
+
